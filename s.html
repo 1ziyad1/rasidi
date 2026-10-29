@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>رصيدي · Scriptable</title>
+<meta name="theme-color" content="#000000">
+<style>
+:root { color-scheme: dark; }
+html, body { margin: 0; background: #000; color: #f2f2f3; font-family: -apple-system, system-ui, Tahoma, sans-serif; }
+.wrap { box-sizing: border-box; max-width: 440px; margin: 0 auto; min-height: 100dvh; display: flex; flex-direction: column; justify-content: center; gap: 16px;
+  padding-block: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-bottom));
+  padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+button { font: inherit; font-size: 22px; height: 60px; border: 0; border-radius: 14px; background: #6fd99a; color: #000; font-weight: 600; cursor: pointer; }
+button:active { opacity: .8; }
+#ok { text-align: center; color: #6fd99a; font-size: 15px; margin: 0; min-height: 1.4em; }
+textarea { box-sizing: border-box; width: 100%; height: 40vh; background: #0f0f12; color: #80808a; border: 1px solid #1e1e22; border-radius: 12px; padding: 10px; font: 11px/1.4 ui-monospace, Menlo, monospace; direction: ltr; text-align: left; resize: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button id="copy" type="button">انسخ الكود</button>
+  <p id="ok" role="status"></p>
+  <textarea id="code" readonly spellcheck="false">// رصيدي — سكربت لتطبيق Scriptable
+// يفتح والكيبورد جاهز: اكتب المبلغ واضغط + أو −
+// للخروج: اترك الخانة فاضية واضغط أي زر
+// الرصيد ينقص ٣٠ كل يوم من ٢٩ أكتوبر ٢٠٢٦، والبيانات على الجوال بس
+
+const START = [2026, 10, 29]; // أول يوم ينخصم
+const DAILY = 30;
+
+const fm = FileManager.local();
+const FILE = fm.joinPath(fm.documentsDirectory(), &quot;rasidi.json&quot;);
+
+let NF;
+try { NF = new Intl.NumberFormat(&quot;en-US&quot;, { maximumFractionDigits: 2 }); }
+catch (e) { NF = { format: (n) =&gt; String(n) }; }
+
+/* ---------- الحسابات ---------- */
+function dayNum(y, m, d) { return Math.floor(Date.UTC(y, m - 1, d) / 86400000); }
+
+function chargedDays(now) {
+  const n = dayNum(now.getFullYear(), now.getMonth() + 1, now.getDate()) - dayNum(START[0], START[1], START[2]) + 1;
+  return n &gt; 0 ? n : 0;
+}
+
+// المبلغ بدون إشارة: أرقام عربية أو إنجليزية، والفاصلة العشرية ٫ أو . أو ,
+function parseAmount(raw) {
+  const s = String(raw == null ? &quot;&quot; : raw)
+    .replace(/[‎‏؜‪-‮⁦-⁩\s+\-−]/g, &quot;&quot;)
+    .replace(/[٠-٩]/g, (c) =&gt; String(c.charCodeAt(0) - 0x0660))
+    .replace(/[۰-۹]/g, (c) =&gt; String(c.charCodeAt(0) - 0x06f0))
+    .replace(/[٫٬،,]/g, &quot;.&quot;);
+  if (!/^(\d+(\.\d*)?|\.\d+)$/.test(s)) return null;
+  const v = Math.round(parseFloat(s) * 100) / 100;
+  return isFinite(v) &amp;&amp; v &gt; 0 &amp;&amp; v &lt; 1e9 ? v : null;
+}
+
+function balanceCents(entries) {
+  let c = 0;
+  for (const e of entries) c += Math.round(e.a * 100);
+  return c - chargedDays(new Date()) * DAILY * 100;
+}
+
+function fmt(cents) {
+  const r = Math.round(cents) / 100;
+  const s = NF.format(Math.abs(r));
+  return &quot;‪&quot; + (r &lt; 0 ? &quot;−&quot; + s : s) + &quot;‬&quot;; // يخلي الإشارة يسار الرقم
+}
+
+function entry(a) {
+  const t = Date.now();
+  return { id: &quot;e&quot; + t.toString(36) + Math.random().toString(36).slice(2, 7), a: Math.round(a * 100) / 100, t };
+}
+
+/* ---------- الحفظ على الجوال ---------- */
+function load() {
+  if (!fm.fileExists(FILE)) return null;
+  try {
+    const o = JSON.parse(fm.readString(FILE));
+    if (o &amp;&amp; Array.isArray(o.entries)) {
+      return o.entries.filter((e) =&gt; e &amp;&amp; typeof e.id === &quot;string&quot; &amp;&amp; typeof e.a === &quot;number&quot; &amp;&amp; isFinite(e.a) &amp;&amp; typeof e.t === &quot;number&quot;);
+    }
+  } catch (e) {}
+  return [];
+}
+
+function save(entries) {
+  try {
+    fm.writeString(FILE, JSON.stringify({ entries }));
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/* ---------- النافذة ---------- */
+async function ask(title, message) {
+  const a = new Alert();
+  a.title = title;
+  if (message) a.message = message;
+  const tf = a.addTextField(&quot;&quot;, &quot;&quot;);
+  tf.setDecimalPadKeyboard();
+  tf.centerAlignText();
+  a.addAction(&quot;+&quot;);
+  a.addAction(&quot;−&quot;);
+  const i = await a.presentAlert();
+  return { sign: i === 1 ? -1 : 1, raw: String(a.textFieldValue(0) || &quot;&quot;).trim() };
+}
+
+async function runApp() {
+  let entries = load();
+  let note = &quot;&quot;;
+
+  // أول مرة: تكتب رصيدك الحالي، و − لو كان بالسالب
+  if (entries === null) {
+    while (true) {
+      const r = await ask(&quot;رصيدك الحين كم؟&quot;, note);
+      entries = [];
+      if (!r.raw) break;
+      const v = parseAmount(r.raw);
+      if (v == null) { note = &quot;اكتب رقم صحيح&quot;; continue; }
+      const diff = Math.round(r.sign * v * 100) - balanceCents([]);
+      if (diff !== 0) entries.push(entry(diff / 100));
+      break;
+    }
+    note = save(entries) ? &quot;&quot; : &quot;ما قدرت أحفظ، حاول مرة ثانية&quot;;
+  }
+
+  while (true) {
+    const r = await ask(fmt(balanceCents(entries)), note);
+    note = &quot;&quot;;
+    if (!r.raw) break;
+    const v = parseAmount(r.raw);
+    if (v == null) { note = &quot;اكتب رقم صحيح&quot;; continue; }
+    entries.push(entry(r.sign * v));
+    if (!save(entries)) {
+      entries.pop();
+      note = &quot;ما قدرت أحفظ، حاول مرة ثانية&quot;;
+    }
+  }
+}
+
+/* ---------- الويدجت ---------- */
+function buildWidget(entries) {
+  const cents = balanceCents(entries || []);
+  const w = new ListWidget();
+  w.backgroundColor = new Color(&quot;#000000&quot;);
+  w.setPadding(12, 12, 12, 12);
+  w.addSpacer();
+  const t = w.addText(fmt(cents));
+  t.font = Font.boldSystemFont(44);
+  t.textColor = new Color(cents &lt; 0 ? &quot;#ff7b72&quot; : cents &gt; 0 ? &quot;#6fd99a&quot; : &quot;#f2f2f3&quot;);
+  t.minimumScaleFactor = 0.3;
+  t.lineLimit = 1;
+  t.centerAlignText();
+  w.addSpacer();
+  const next = new Date();
+  next.setHours(24, 0, 5, 0); // يتحدث بعد نص الليل
+  w.refreshAfterDate = next;
+  return w;
+}
+
+/* ---------- التشغيل ---------- */
+if (config.runsInWidget) {
+  Script.setWidget(buildWidget(load()));
+} else {
+  await runApp();
+}
+Script.complete();
+</textarea>
+</div>
+<script>
+(function () {
+  var btn = document.getElementById("copy"), ta = document.getElementById("code"), ok = document.getElementById("ok");
+  function done() { ok.textContent = "تم النسخ، روح Scriptable والصقه"; }
+  function fallback() {
+    ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length);
+    var worked = false;
+    try { worked = document.execCommand("copy"); } catch (e) {}
+    if (worked) done(); else ok.textContent = "الكود محدد، اضغط عليه مطولاً واختر نسخ";
+  }
+  btn.addEventListener("click", function () {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(ta.value).then(done, fallback);
+    } else {
+      fallback();
+    }
+  });
+})();
+</script>
+</body>
+</html>
