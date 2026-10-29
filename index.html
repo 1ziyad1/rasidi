@@ -107,7 +107,7 @@ body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--fo
   <div id="bal" class="bal" dir="ltr" aria-live="polite">٠</div>
   <div class="entry">
     <label for="amt" class="sr">المبلغ</label>
-    <input id="amt" type="text" inputmode="decimal" dir="ltr" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+    <input id="amt" type="text" inputmode="decimal" dir="ltr" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" autofocus>
     <div class="signs">
       <button type="button" id="plus" aria-label="أضف المبلغ">+</button>
       <button type="button" id="minus" aria-label="اخصم المبلغ">−</button>
@@ -250,6 +250,15 @@ body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--fo
 
   minusEl.addEventListener("click", function () { apply(-1); });
   plusEl.addEventListener("click", function () { apply(1); });
+
+  // iPhone opens the keyboard only after a tap, so a tap anywhere on the screen opens it.
+  function focusField(ev) {
+    var t = ev.target;
+    if (t && t.closest && t.closest("button, input")) return;
+    if (document.activeElement !== amtEl) amtEl.focus();
+  }
+  document.addEventListener("touchend", focusField, { passive: true });
+  document.addEventListener("click", focusField);
   amtEl.addEventListener("input", function () { hintEl.hidden = true; });
 
   document.addEventListener("visibilitychange", function () { if (!document.hidden) renderBalance(); });
@@ -258,6 +267,7 @@ body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--fo
 
   load();
   renderBalance();
+  try { amtEl.focus({ preventScroll: true }); } catch (e) {}
 })();
 </script>
 
