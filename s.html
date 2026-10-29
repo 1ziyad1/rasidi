@@ -22,9 +22,9 @@ textarea { box-sizing: border-box; width: 100%; height: 40vh; background: #0f0f1
   <button id="copy" type="button">انسخ الكود</button>
   <p id="ok" role="status"></p>
   <textarea id="code" readonly spellcheck="false">// رصيدي — سكربت لتطبيق Scriptable
-// يفتح والكيبورد جاهز: اكتب المبلغ واضغط + أو −
-// للخروج: اترك الخانة فاضية واضغط أي زر
+// نفس الشاشة السوداء: الرصيد، وتحته الخانة و + و −، والكيبورد يفتح لحاله
 // الرصيد ينقص ٣٠ كل يوم من ٢٩ أكتوبر ٢٠٢٦، والبيانات على الجوال بس
+// أول مرة يطلع ؟ مكان الرصيد: اكتب رصيدك الحالي واضغط + أو −
 
 const START = [2026, 10, 29]; // أول يوم ينخصم
 const DAILY = 30;
@@ -44,18 +44,6 @@ function chargedDays(now) {
   return n &gt; 0 ? n : 0;
 }
 
-// المبلغ بدون إشارة: أرقام عربية أو إنجليزية، والفاصلة العشرية ٫ أو . أو ,
-function parseAmount(raw) {
-  const s = String(raw == null ? &quot;&quot; : raw)
-    .replace(/[‎‏؜‪-‮⁦-⁩\s+\-−]/g, &quot;&quot;)
-    .replace(/[٠-٩]/g, (c) =&gt; String(c.charCodeAt(0) - 0x0660))
-    .replace(/[۰-۹]/g, (c) =&gt; String(c.charCodeAt(0) - 0x06f0))
-    .replace(/[٫٬،,]/g, &quot;.&quot;);
-  if (!/^(\d+(\.\d*)?|\.\d+)$/.test(s)) return null;
-  const v = Math.round(parseFloat(s) * 100) / 100;
-  return isFinite(v) &amp;&amp; v &gt; 0 &amp;&amp; v &lt; 1e9 ? v : null;
-}
-
 function balanceCents(entries) {
   let c = 0;
   for (const e of entries) c += Math.round(e.a * 100);
@@ -65,7 +53,7 @@ function balanceCents(entries) {
 function fmt(cents) {
   const r = Math.round(cents) / 100;
   const s = NF.format(Math.abs(r));
-  return &quot;‪&quot; + (r &lt; 0 ? &quot;−&quot; + s : s) + &quot;‬&quot;; // يخلي الإشارة يسار الرقم
+  return r &lt; 0 ? &quot;−&quot; + s : s;
 }
 
 function entry(a) {
@@ -94,50 +82,102 @@ function save(entries) {
   }
 }
 
-/* ---------- النافذة ---------- */
-async function ask(title, message) {
-  const a = new Alert();
-  a.title = title;
-  if (message) a.message = message;
-  const tf = a.addTextField(&quot;&quot;, &quot;&quot;);
-  tf.setDecimalPadKeyboard();
-  tf.centerAlignText();
-  a.addAction(&quot;+&quot;);
-  a.addAction(&quot;−&quot;);
-  const i = await a.presentAlert();
-  return { sign: i === 1 ? -1 : 1, raw: String(a.textFieldValue(0) || &quot;&quot;).trim() };
+function sleep(ms) { return new Promise((r) =&gt; Timer.schedule(ms, false, r)); }
+
+/* ---------- الشاشة ---------- */
+function pageHTML(text, cents) {
+  return &#x27;&lt;!doctype html&gt;&lt;html lang=&quot;ar&quot; dir=&quot;rtl&quot;&gt;&lt;head&gt;&lt;meta charset=&quot;utf-8&quot;&gt;&#x27; +
+&#x27;&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1, viewport-fit=cover&quot;&gt;&#x27; +
+&#x27;&lt;style&gt;&#x27; +
+&#x27;:root{--bg:#000;--fg:#f2f2f3;--line:#1e1e22;--field:#0f0f12;--key:#18181c;--key-down:#2a2a30;--neg:#ff7b72;--pos:#6fd99a;color-scheme:dark}&#x27; +
+&#x27;html,body{margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,&quot;SF Arabic&quot;,system-ui,sans-serif;-webkit-text-size-adjust:100%}&#x27; +
+&#x27;[hidden]{display:none!important}&#x27; +
+&#x27;.app{box-sizing:border-box;max-width:440px;margin:0 auto;min-height:100vh;min-height:100dvh;padding:16px 16px 22vh;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:56px;container-type:inline-size}&#x27; +
+&#x27;.bal{font-size:clamp(44px,16vw,88px);font-size:min(96px,calc(100cqi / (var(--len,3) * 0.62)));font-weight:600;line-height:1.1;white-space:nowrap;font-variant-numeric:tabular-nums}&#x27; +
+&#x27;.bal.neg{color:var(--neg)}.bal.pos{color:var(--pos)}&#x27; +
+&#x27;.entry{width:100%;max-width:340px;display:flex;flex-direction:column;gap:10px}&#x27; +
+&#x27;#amt{box-sizing:border-box;display:block;width:200px;max-width:100%;height:60px;margin:0 auto;padding:0 12px;font:inherit;font-size:30px;text-align:center;background:var(--field);color:var(--fg);border:1px solid var(--line);border-radius:12px;outline:none;font-variant-numeric:tabular-nums}&#x27; +
+&#x27;.signs{display:grid;grid-template-columns:1fr 1fr;gap:10px;width:200px;max-width:100%;margin:0 auto}&#x27; +
+&#x27;.signs button{font:inherit;font-size:34px;font-weight:500;line-height:1;height:58px;border:0;border-radius:12px;background:var(--key);-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none}&#x27; +
+&#x27;.signs button:active{background:var(--key-down)}#minus{color:var(--neg)}#plus{color:var(--pos)}&#x27; +
+&#x27;.hint{margin:0;text-align:center;color:var(--neg);font-size:13px}&#x27; +
+&#x27;&lt;/style&gt;&lt;/head&gt;&lt;body&gt;&lt;main class=&quot;app&quot;&gt;&#x27; +
+&#x27;&lt;div id=&quot;bal&quot; class=&quot;bal&quot; dir=&quot;ltr&quot;&gt;&lt;/div&gt;&#x27; +
+&#x27;&lt;div class=&quot;entry&quot;&gt;&#x27; +
+&#x27;&lt;input id=&quot;amt&quot; type=&quot;text&quot; inputmode=&quot;decimal&quot; dir=&quot;ltr&quot; autocomplete=&quot;off&quot; autocorrect=&quot;off&quot; autocapitalize=&quot;off&quot; spellcheck=&quot;false&quot;&gt;&#x27; +
+&#x27;&lt;div class=&quot;signs&quot;&gt;&lt;button type=&quot;button&quot; id=&quot;plus&quot;&gt;+&lt;/button&gt;&lt;button type=&quot;button&quot; id=&quot;minus&quot;&gt;−&lt;/button&gt;&lt;/div&gt;&#x27; +
+&#x27;&lt;p id=&quot;hint&quot; class=&quot;hint&quot; role=&quot;status&quot; hidden&gt;&lt;/p&gt;&#x27; +
+&#x27;&lt;/div&gt;&lt;/main&gt;&#x27; +
+&#x27;&lt;script&gt;(function(){&#x27; +
+&#x27;var waiting=false,hintTimer=0;&#x27; +
+&#x27;var balEl=document.getElementById(&quot;bal&quot;),amtEl=document.getElementById(&quot;amt&quot;),hintEl=document.getElementById(&quot;hint&quot;);&#x27; +
+&#x27;function parseAmount(raw){var s=String(raw==null?&quot;&quot;:raw)&#x27; +
+&#x27;.replace(/[\\u200e\\u200f\\u061c\\u202a-\\u202e\\u2066-\\u2069\\s+\\-\\u2212]/g,&quot;&quot;)&#x27; +
+&#x27;.replace(/[\\u0660-\\u0669]/g,function(c){return String(c.charCodeAt(0)-0x0660)})&#x27; +
+&#x27;.replace(/[\\u06f0-\\u06f9]/g,function(c){return String(c.charCodeAt(0)-0x06f0)})&#x27; +
+&#x27;.replace(/[\\u066b\\u066c\\u060c,]/g,&quot;.&quot;);&#x27; +
+&#x27;if(!/^(\\d+(\\.\\d*)?|\\.\\d+)$/.test(s))return null;&#x27; +
+&#x27;var v=Math.round(parseFloat(s)*100)/100;return isFinite(v)&amp;&amp;v&gt;0&amp;&amp;v&lt;1e9?v:null}&#x27; +
+&#x27;function showHint(t){hintEl.textContent=t;hintEl.hidden=false;clearTimeout(hintTimer);hintTimer=setTimeout(function(){hintEl.hidden=true},2500)}&#x27; +
+&#x27;window.setBalance=function(text,cents,note){balEl.textContent=text;balEl.className=&quot;bal&quot;+(cents&lt;0?&quot; neg&quot;:cents&gt;0?&quot; pos&quot;:&quot;&quot;);balEl.style.setProperty(&quot;--len&quot;,Math.max(3,text.length));if(note)showHint(note)};&#x27; +
+&#x27;window.waitEntry=function(){waiting=true};&#x27; +
+&#x27;window.focusField=function(){if(document.activeElement!==amtEl)amtEl.focus();return document.activeElement===amtEl};&#x27; +
+&#x27;function apply(sign){&#x27; +
+&#x27;if(!amtEl.value.trim()){amtEl.focus();return}&#x27; +
+&#x27;var v=parseAmount(amtEl.value);&#x27; +
+&#x27;if(v==null){showHint(&quot;اكتب رقم صحيح&quot;);return}&#x27; +
+&#x27;if(!waiting||typeof completion!==&quot;function&quot;)return;&#x27; +
+&#x27;waiting=false;amtEl.value=&quot;&quot;;hintEl.hidden=true;amtEl.blur();completion(String(sign*v))}&#x27; +
+&#x27;document.getElementById(&quot;plus&quot;).addEventListener(&quot;click&quot;,function(){apply(1)});&#x27; +
+&#x27;document.getElementById(&quot;minus&quot;).addEventListener(&quot;click&quot;,function(){apply(-1)});&#x27; +
+&#x27;amtEl.addEventListener(&quot;input&quot;,function(){hintEl.hidden=true});&#x27; +
+&#x27;function tapFocus(ev){var t=ev.target;if(t&amp;&amp;t.closest&amp;&amp;t.closest(&quot;button, input&quot;))return;if(document.activeElement!==amtEl)amtEl.focus()}&#x27; +
+&#x27;document.addEventListener(&quot;touchend&quot;,tapFocus,{passive:true});document.addEventListener(&quot;click&quot;,tapFocus);&#x27; +
+&#x27;window.setBalance(&#x27; + JSON.stringify(text) + &#x27;,&#x27; + cents + &#x27;);&#x27; +
+&#x27;})();&lt;/script&gt;&lt;/body&gt;&lt;/html&gt;&#x27;;
 }
 
 async function runApp() {
   let entries = load();
-  let note = &quot;&quot;;
+  let setup = entries === null; // أول مرة: الرقم اللي تكتبه يصير رصيدك
+  if (setup) entries = [];
 
-  // أول مرة: تكتب رصيدك الحالي، و − لو كان بالسالب
-  if (entries === null) {
-    while (true) {
-      const r = await ask(&quot;رصيدك الحين كم؟&quot;, note);
-      entries = [];
-      if (!r.raw) break;
-      const v = parseAmount(r.raw);
-      if (v == null) { note = &quot;اكتب رقم صحيح&quot;; continue; }
-      const diff = Math.round(r.sign * v * 100) - balanceCents([]);
-      if (diff !== 0) entries.push(entry(diff / 100));
-      break;
-    }
-    note = save(entries) ? &quot;&quot; : &quot;ما قدرت أحفظ، حاول مرة ثانية&quot;;
+  const wv = new WebView();
+  await wv.loadHTML(setup ? pageHTML(&quot;؟&quot;, 0) : pageHTML(fmt(balanceCents(entries)), balanceCents(entries)));
+
+  let closed = false;
+  const shown = wv.present(true).then(() =&gt; { closed = true; return null; });
+
+  // يفتح الكيبورد أول ما تطلع الشاشة
+  for (const wait of [350, 400, 600]) {
+    await sleep(wait);
+    if (closed) break;
+    try { if (await wv.evaluateJavaScript(&quot;focusField()&quot;)) break; } catch (e) {}
   }
 
-  while (true) {
-    const r = await ask(fmt(balanceCents(entries)), note);
-    note = &quot;&quot;;
-    if (!r.raw) break;
-    const v = parseAmount(r.raw);
-    if (v == null) { note = &quot;اكتب رقم صحيح&quot;; continue; }
-    entries.push(entry(r.sign * v));
-    if (!save(entries)) {
-      entries.pop();
-      note = &quot;ما قدرت أحفظ، حاول مرة ثانية&quot;;
+  while (!closed) {
+    let res;
+    try { res = await Promise.race([wv.evaluateJavaScript(&quot;waitEntry()&quot;, true), shown]); }
+    catch (e) { break; }
+    if (res == null || closed) break;
+    const a = Math.round(Number(res) * 100) / 100;
+    if (!isFinite(a) || a === 0) continue;
+
+    const before = entries.slice();
+    if (setup) {
+      const diff = Math.round(a * 100) - balanceCents([]);
+      entries = diff !== 0 ? [entry(diff / 100)] : [];
+    } else {
+      entries.push(entry(a));
     }
+    let note = &quot;&quot;;
+    if (save(entries)) setup = false;
+    else { entries = before; note = &quot;ما قدرت أحفظ، حاول مرة ثانية&quot;; }
+
+    const c = balanceCents(entries);
+    const text = setup ? &quot;؟&quot; : fmt(c);
+    try { await wv.evaluateJavaScript(&quot;setBalance(&quot; + JSON.stringify(text) + &quot;,&quot; + (setup ? 0 : c) + &quot;,&quot; + JSON.stringify(note) + &quot;)&quot;); }
+    catch (e) {}
   }
 }
 
@@ -148,7 +188,7 @@ function buildWidget(entries) {
   w.backgroundColor = new Color(&quot;#000000&quot;);
   w.setPadding(12, 12, 12, 12);
   w.addSpacer();
-  const t = w.addText(fmt(cents));
+  const t = w.addText(&quot;‪&quot; + fmt(cents) + &quot;‬&quot;);
   t.font = Font.boldSystemFont(44);
   t.textColor = new Color(cents &lt; 0 ? &quot;#ff7b72&quot; : cents &gt; 0 ? &quot;#6fd99a&quot; : &quot;#f2f2f3&quot;);
   t.minimumScaleFactor = 0.3;
