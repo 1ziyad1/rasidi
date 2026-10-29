@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>رصيدي</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="رصيدي">
+<meta name="theme-color" content="#000000">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="icon" href="icon.png">
+<style>
+/* Layout: one screen, content a little above center — the balance, the amount field, then − and + */
+:root {
+  --bg: #000;
+  --fg: #f2f2f3;
+  --muted: #80808a;
+  --line: #1e1e22;
+  --field: #0f0f12;
+  --key: #18181c;
+  --key-down: #2a2a30;
+  --neg: #ff7b72;
+  --pos: #6fd99a;
+  --font: -apple-system, "SF Arabic", system-ui, "Segoe UI", Tahoma, "Noto Sans Arabic", sans-serif;
+  color-scheme: dark;
+}
+html { background: #000; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--font); -webkit-text-size-adjust: 100%; }
+.app {
+  box-sizing: border-box;
+  max-width: 440px;
+  margin: 0 auto;
+  min-height: 100vh;
+  min-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  padding-block: 16px 22vh;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 24px;
+  container-type: inline-size;
+}
+.bal {
+  font-size: clamp(44px, 16vw, 88px);
+  font-size: min(96px, calc(100cqi / (var(--len, 3) * 0.62)));
+  font-weight: 600;
+  line-height: 1.1;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  unicode-bidi: isolate;
+}
+.bal.neg { color: var(--neg); }
+.bal.pos { color: var(--pos); }
+
+.entry { width: 100%; max-width: 340px; display: flex; flex-direction: column; gap: 10px; }
+#amt {
+  box-sizing: border-box;
+  width: 100%;
+  height: 60px;
+  margin: 0;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 30px;
+  text-align: center;
+  background: var(--field);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  outline: none;
+  font-variant-numeric: tabular-nums;
+}
+#amt::placeholder { color: var(--muted); font-size: 22px; }
+#amt:focus { border-color: var(--muted); }
+.signs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.signs button {
+  font: inherit;
+  font-size: 34px;
+  font-weight: 500;
+  line-height: 1;
+  height: 58px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--key);
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.signs button:active { background: var(--key-down); }
+#minus { color: var(--neg); }
+#plus { color: var(--pos); }
+#amt:focus-visible, .signs button:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+.hint, .status { margin: 0; text-align: center; color: var(--neg); font-size: 13px; }
+[hidden] { display: none !important; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<main class="app" dir="rtl" lang="ar">
+  <div id="bal" class="bal" dir="ltr" aria-live="polite">٠</div>
+  <div class="entry">
+    <label for="amt" class="sr">المبلغ</label>
+    <input id="amt" type="text" inputmode="decimal" dir="ltr" placeholder="المبلغ" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+    <div class="signs">
+      <button type="button" id="minus" aria-label="اخصم المبلغ">−</button>
+      <button type="button" id="plus" aria-label="أضف المبلغ">+</button>
+    </div>
+    <p id="hint" class="hint" role="status" hidden></p>
+  </div>
+  <p id="status" class="status" hidden></p>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  /*PURE*/
+  var START = [2026, 10, 29]; // first day that gets charged
+  var DAILY = 30;
+  var MONTH_RE = /^m\d{4}-\d{2}$/;
+
+  function dayNum(y, m, d) { return Math.floor(Date.UTC(y, m - 1, d) / 86400000); }
+
+  function chargedDays(now) {
+    var n = dayNum(now.getFullYear(), now.getMonth() + 1, now.getDate()) - dayNum(START[0], START[1], START[2]) + 1;
+    return n > 0 ? n : 0;
+  }
+
+  function monthKey(t) {
+    var d = new Date(t);
+    return "m" + d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+  }
+
+  function sanitizeList(list) {
+    if (!Array.isArray(list)) return [];
+    return list.filter(function (e) {
+      return e && typeof e.id === "string" && typeof e.a === "number" && isFinite(e.a) && typeof e.t === "number";
+    }).map(function (e) { return { id: e.id, a: e.a, t: e.t }; });
+  }
+
+  // Amount without sign: Arabic, Persian or English digits; ٫ . or , as the decimal point.
+  function parseAmount(raw) {
+    var s = String(raw == null ? "" : raw)
+      .replace(/[‎‏؜‪-‮⁦-⁩\s+\-−]/g, "")
+      .replace(/[٠-٩]/g, function (c) { return String(c.charCodeAt(0) - 0x0660); })
+      .replace(/[۰-۹]/g, function (c) { return String(c.charCodeAt(0) - 0x06f0); })
+      .replace(/[٫٬،,]/g, ".");
+    if (!/^(\d+(\.\d*)?|\.\d+)$/.test(s)) return null;
+    var v = Math.round(parseFloat(s) * 100) / 100;
+    return isFinite(v) && v > 0 && v < 1e9 ? v : null;
+  }
+
+  function totalCents(months) {
+    var c = 0;
+    Object.keys(months).forEach(function (k) {
+      months[k].forEach(function (e) { c += Math.round(e.a * 100); });
+    });
+    return c;
+  }
+  /*END PURE*/
+
+  var KEY = "rasidi.v1";
+  var months = {};
+  var hintTimer = 0;
+
+  function $(id) { return document.getElementById(id); }
+  var balEl = $("bal"), amtEl = $("amt"), minusEl = $("minus"), plusEl = $("plus"),
+      hintEl = $("hint"), statusEl = $("status");
+
+  var NF;
+  try { NF = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }); }
+  catch (e) { NF = { format: function (n) { return String(n); } }; }
+
+  function money(n) {
+    var r = Math.round(n * 100) / 100;
+    var s = NF.format(Math.abs(r));
+    return r < 0 ? "−" + s : s;
+  }
+
+  /* ---------- saved on this device only ---------- */
+  var NOT_SAVED = "هذا المتصفح مانع الحفظ، الأرقام بتروح لو قفلت الصفحة";
+
+  function load() {
+    try {
+      var raw = localStorage.getItem(KEY);
+      if (raw) {
+        var o = JSON.parse(raw);
+        if (o && o.months && typeof o.months === "object") {
+          Object.keys(o.months).forEach(function (k) {
+            if (MONTH_RE.test(k)) months[k] = sanitizeList(o.months[k]);
+          });
+        }
+      }
+      localStorage.setItem("rasidi.check", "1");
+      localStorage.removeItem("rasidi.check");
+    } catch (e) {
+      setStatus(NOT_SAVED);
+    }
+  }
+
+  function save() {
+    try {
+      localStorage.setItem(KEY, JSON.stringify({ months: months }));
+      setStatus("");
+    } catch (e) {
+      setStatus(NOT_SAVED);
+    }
+  }
+
+  function setStatus(text) {
+    statusEl.textContent = text || "";
+    statusEl.hidden = !text;
+  }
+
+  function showHint(text) {
+    hintEl.textContent = text;
+    hintEl.hidden = false;
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(function () { hintEl.hidden = true; }, 2500);
+  }
+
+  function renderBalance() {
+    var cents = totalCents(months) - chargedDays(new Date()) * DAILY * 100;
+    balEl.textContent = money(cents / 100);
+    balEl.className = "bal" + (cents < 0 ? " neg" : cents > 0 ? " pos" : "");
+    balEl.style.setProperty("--len", Math.max(3, balEl.textContent.length));
+  }
+
+  /* ---------- − and + take the typed amount ---------- */
+  function apply(sign) {
+    if (!amtEl.value.trim()) { amtEl.focus(); return; }
+    var v = parseAmount(amtEl.value);
+    if (v == null) { showHint("اكتب رقم صحيح"); return; }
+    var t = Date.now();
+    var k = monthKey(t);
+    months[k] = (months[k] || []).concat([{ id: "e" + t.toString(36) + Math.random().toString(36).slice(2, 7), a: sign * v, t: t }]);
+    save();
+    amtEl.value = "";
+    hintEl.hidden = true;
+    amtEl.blur();
+    renderBalance();
+  }
+
+  minusEl.addEventListener("click", function () { apply(-1); });
+  plusEl.addEventListener("click", function () { apply(1); });
+  amtEl.addEventListener("input", function () { hintEl.hidden = true; });
+
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) renderBalance(); });
+  window.addEventListener("pageshow", renderBalance);
+  setInterval(renderBalance, 20000);
+
+  load();
+  renderBalance();
+})();
+</script>
+
+</body>
+</html>
